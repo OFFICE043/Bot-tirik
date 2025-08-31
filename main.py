@@ -16,8 +16,8 @@ def run_flask():
     app.run(host="0.0.0.0", port=5000)
 
 # ---------------- Bot sozlamalari ----------------
-MONITOR_BOT_TOKEN = "MONITOR_BOT_TOKEN"  # Monitoring bot token
-ADMIN_ID = 123456789  # Admin ID ni shu yerga yozamiz
+MONITOR_BOT_TOKEN = "8289643931:AAHaci9ymD2EDaMLBjSM1VYH_kVijtj4wwQ"  # Monitoring bot token
+ADMIN_ID = 7483732504  # Admin ID ni shu yerga yozamiz
 CHECK_INTERVAL = 300  # sekund (5 min = 300, 30 min = 1800)
 JSON_FILE = "bots.json"
 
