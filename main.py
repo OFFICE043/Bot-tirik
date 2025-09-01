@@ -2,10 +2,12 @@ import asyncio
 import aiohttp
 import json
 from aiogram import Bot, Dispatcher, executor, types
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
 from flask import Flask
 from threading import Thread
 
-# ---------------- Flask qismi ----------------
+# ---------------- Flask қызыметі ----------------
 app = Flask(__name__)
 
 @app.route("/health")
@@ -15,16 +17,20 @@ def health():
 def run_flask():
     app.run(host="0.0.0.0", port=5000)
 
-# ---------------- Bot sozlamalari ----------------
-MONITOR_BOT_TOKEN = "8289643931:AAHaci9ymD2EDaMLBjSM1VYH_kVijtj4wwQ"  # Monitoring bot token
-ADMIN_ID = 7483732504  # Admin ID ni shu yerga yozamiz
-CHECK_INTERVAL = 300  # sekund (5 min = 300, 30 min = 1800)
+# ---------------- Бот параметрлері ----------------
+MONITOR_BOT_TOKEN = "8289643931:AAHaci9ymD2EDaMLBjSM1VYH_kVijtj4wwQ"  # Мониторинг бот токені
+ADMIN_ID = 7483732504  # Әкімші ID
+CHECK_INTERVAL = 300  # секунд (5 мин = 300, 30 мин = 1800)
 JSON_FILE = "bots.json"
 
 bot = Bot(token=MONITOR_BOT_TOKEN)
 dp = Dispatcher(bot)
 
-# ---------------- JSON bilan ishlash ----------------
+# ---------------- Күйлерді анықтау (FSM) ----------------
+class AddBotState(StatesGroup):
+    url = State()  # URL енгізу күйі
+
+# ---------------- JSON-мен жұмыс ----------------
 def load_bots():
     try:
         with open(JSON_FILE, "r") as f:
@@ -36,7 +42,7 @@ def save_bots(bots):
     with open(JSON_FILE, "w") as f:
         json.dump(bots, f, indent=4)
 
-# ---------------- Asosiy monitoring vazifasi ----------------
+# ---------------- Негізгі мониторинг тапсырмасы ----------------
 async def check_bots():
     await bot.send_message(ADMIN_ID, "✅ Monitoring bot ishga tushdi.")
     while True:
@@ -51,7 +57,7 @@ async def check_bots():
                 await bot.send_message(ADMIN_ID, f"❌ Bot o‘chib qoldi!\n{url}\nXato: {e}")
         await asyncio.sleep(CHECK_INTERVAL)
 
-# ---------------- Telegram komandalar ----------------
+# ---------------- Telegram командалары ----------------
 @dp.message_handler(commands=["start"])
 async def start_handler(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -63,11 +69,14 @@ async def start_handler(message: types.Message):
     await message.answer("👋 Salom Admin!\nQuyidagi menyudan tanlang:", reply_markup=keyboard)
 
 @dp.message_handler(lambda message: message.text == "➕ Bot qo‘shish")
-async def add_bot(message: types.Message):
+async def add_bot(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
     await message.answer("🔗 Menga health URL yuboring:")
-    dp.register_message_handler(save_new_bot, content_types=["text"], state=None)
+    await AddBotState.url.set()  # Күйді орнату
 
-async def save_new_bot(message: types.Message):
+@dp.message_handler(state=AddBotState.url)
+async def save_new_bot(message: types.Message, state: FSMContext):
     url = message.text.strip()
     bots = load_bots()
     if url in bots:
@@ -76,10 +85,12 @@ async def save_new_bot(message: types.Message):
         bots.append(url)
         save_bots(bots)
         await message.answer(f"✅ Bot qo‘shildi:\n{url}")
-    dp.register_message_handler(start_handler, commands=["start"])
+    await state.finish()  # Күйді аяқтау
 
 @dp.message_handler(lambda message: message.text == "📋 Botlar ro‘yxati")
 async def list_bots(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
     bots = load_bots()
     if not bots:
         await message.answer("📭 Hozircha hech qanday bot qo‘shilmagan.")
@@ -91,6 +102,8 @@ async def list_bots(message: types.Message):
 
 @dp.message_handler(lambda message: message.text == "❌ Botni o‘chirish")
 async def delete_bot(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
     bots = load_bots()
     if not bots:
         return await message.answer("📭 Hozircha hech qanday bot yo‘q.")
@@ -110,13 +123,14 @@ async def confirm_delete(callback_query: types.CallbackQuery):
         await bot.send_message(ADMIN_ID, f"🗑 Bot o‘chirildi:\n{url}")
     else:
         await bot.send_message(ADMIN_ID, "⚠️ Bu bot ro‘yxatda topilmadi.")
+    await callback_query.answer()  # Callback-қа жауап беру
 
-# ---------------- Ishga tushirish ----------------
+# ---------------- Іске қосу ----------------
 if __name__ == "__main__":
-    # Flaskni alohida oqimda ishga tushiramiz
+    # Flask-ті бөлек ағында іске қосу
     flask_thread = Thread(target=run_flask)
     flask_thread.start()
 
     loop = asyncio.get_event_loop()
-    loop.create_task(check_bots())  # fon tekshiruvchi task
+    loop.create_task(check_bots())  # Фондық тексеру тапсырмасы
     executor.start_polling(dp, skip_updates=True)
