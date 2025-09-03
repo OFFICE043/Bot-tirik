@@ -4,6 +4,7 @@ import json
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from flask import Flask
 from threading import Thread
 
@@ -22,13 +23,14 @@ def keep_alive():
     t.start()
 
 # ---------------- Bot sozlamalari ----------------
-MONITOR_BOT_TOKEN = "7457989814:AAGfKUTgDoEu9VxftnMCwjV5rCCrm6ochkQ"   # Monitoring bot tokeni
+MONITOR_BOT_TOKEN = "8144186293:AAGLBCcnmgmfSg9YAzGVe3vcafYy6CXZNTg"   # Monitoring bot tokeni
 ADMIN_ID = 7483732504                     # Admin ID
 CHECK_INTERVAL = 300                      # 5 minut = 300
 JSON_FILE = "bots.json"
 
 bot = Bot(token=MONITOR_BOT_TOKEN)
-dp = Dispatcher(bot)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
 
 # ---------------- FSM ----------------
 class AddBotState(StatesGroup):
@@ -44,7 +46,7 @@ def load_bots():
 
 def save_bots(bots):
     with open(JSON_FILE, "w") as f:
-        json.dump(bots, f, indent=4)
+        json.dump(bots, f, indent=4, ensure_ascii=False)
 
 # ---------------- Monitoring ----------------
 async def check_bots():
