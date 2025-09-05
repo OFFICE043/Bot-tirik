@@ -19,8 +19,8 @@ def run_flask():
     app.run(host="0.0.0.0", port=5000)
 
 # ---------------- Config ----------------
-MONITOR_BOT_TOKEN = "8144186293:AAGLBCcnmgmfSg9YAzGVe3vcafYy6CXZNTg"   # Monitoring bot token
-ADMIN_ID = 7483732504                 # Admin ID
+MONITOR_BOT_TOKEN = "8144186293:AAGLBCcnmgmfSg9YAzGVe3vcafYy6CXZNTg"   # monitoring bot token
+ADMIN_ID = 7483732504                 # admin id
 CHECK_INTERVAL = 300                  # 5 minut
 JSON_FILE = "bots.json"
 
@@ -44,36 +44,43 @@ def save_bots(bots):
     with open(JSON_FILE, "w") as f:
         json.dump(bots, f, indent=4, ensure_ascii=False)
 
-def update_bot_status(token, status, when):
+def update_status(token, status):
     bots = load_bots()
     for b in bots:
         if b["token"] == token:
             b["status"] = status
             if status == "online":
-                b["last_online"] = when
+                b["last_online"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             else:
-                b["last_offline"] = when
+                b["last_offline"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     save_bots(bots)
 
-# ---------------- Bot tekshirish ----------------
+# ---------------- Tekshirish ----------------
 async def check_bots():
     await bot.send_message(ADMIN_ID, "✅ Monitoring ishga tushdi.")
     while True:
         bots = load_bots()
         for b in bots:
             token = b["token"]
+            username = b["username"]
+
             try:
-                test_bot = Bot(token=token)
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(f"https://api.telegram.org/bot{token}/getMe") as resp:
+                    async with session.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10) as resp:
                         if resp.status == 200:
-                            update_bot_status(token, "online", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                            # agar hozir offline bo‘lsa → online bo‘ldi
+                            if b.get("status") != "online":
+                                await bot.send_message(ADMIN_ID, f"🟢 Bot online bo‘ldi: @{username}")
+                            update_status(token, "online")
                         else:
-                            update_bot_status(token, "offline", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                            await bot.send_message(ADMIN_ID, f"⚠️ Bot ishlamayapti: @{b['username']}")
-            except:
-                update_bot_status(token, "offline", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                await bot.send_message(ADMIN_ID, f"❌ Bot o‘chdi: @{b['username']}")
+                            if b.get("status") != "offline":
+                                await bot.send_message(ADMIN_ID, f"❌ Bot offline bo‘ldi: @{username}")
+                            update_status(token, "offline")
+            except Exception:
+                if b.get("status") != "offline":
+                    await bot.send_message(ADMIN_ID, f"❌ Bot o‘chdi: @{username}")
+                update_status(token, "offline")
+
         await asyncio.sleep(CHECK_INTERVAL)
 
 # ---------------- Telegram komandalar ----------------
@@ -87,17 +94,18 @@ async def start_handler(message: types.Message):
     keyboard.add("❌ Botni o‘chirish", "📊 Bot statistika")
     await message.answer("👋 Salom Admin!\nQuyidagilardan tanlang:", reply_markup=keyboard)
 
+# ➕ qo‘shish
 @dp.message_handler(lambda m: m.text == "➕ Bot qo‘shish")
 async def add_bot(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    await message.answer("🔑 Menga bot token yuboring:")
+    await message.answer("🔑 Bot token yuboring:")
     await AddBotState.token.set()
 
 @dp.message_handler(state=AddBotState.token)
 async def add_bot_token(message: types.Message, state: FSMContext):
     await state.update_data(token=message.text.strip())
-    await message.answer("👤 Endi bot username yuboring (@ bilan):")
+    await message.answer("👤 Bot username yuboring (@ bilan):")
     await AddBotState.username.set()
 
 @dp.message_handler(state=AddBotState.username)
@@ -119,6 +127,7 @@ async def add_bot_username(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Bot qo‘shildi: @{username}")
     await state.finish()
 
+# 📋 ro‘yxat
 @dp.message_handler(lambda m: m.text == "📋 Botlar ro‘yxati")
 async def list_bots(message: types.Message):
     bots = load_bots()
@@ -126,9 +135,10 @@ async def list_bots(message: types.Message):
         return await message.answer("📭 Hech qanday bot yo‘q.")
     text = "📋 Botlar:\n\n"
     for i, b in enumerate(bots, 1):
-        text += f"{i}. @{b['username']} (status: {b['status']})\n"
+        text += f"{i}. @{b['username']} — {b['status']}\n"
     await message.answer(text)
 
+# ❌ o‘chirish
 @dp.message_handler(lambda m: m.text == "❌ Botni o‘chirish")
 async def delete_bot(message: types.Message):
     bots = load_bots()
@@ -148,6 +158,7 @@ async def delete_bot_confirm(call: types.CallbackQuery):
     await call.message.answer("🗑 Bot o‘chirildi.")
     await call.answer()
 
+# 📊 statistika
 @dp.message_handler(lambda m: m.text == "📊 Bot statistika")
 async def bot_statistics(message: types.Message):
     bots = load_bots()
@@ -164,7 +175,7 @@ async def show_stats(call: types.CallbackQuery):
     bots = load_bots()
     for b in bots:
         if b["token"] == token:
-            text = f"📊 Statistika @{b['username']}:\n\n"
+            text = f"📊 @{b['username']} statistika:\n\n"
             text += f"🟢 Status: {b['status']}\n"
             text += f"⏰ Oxirgi online: {b['last_online']}\n"
             text += f"❌ Oxirgi offline: {b['last_offline']}\n"
