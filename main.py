@@ -1,15 +1,14 @@
 import asyncio
 import aiohttp
 import json
-import datetime
+from datetime import datetime
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from flask import Flask
 from threading import Thread
 
-# ---------------- Flask xizmatlari ----------------
+# ---------------- Flask keep_alive ----------------
 app = Flask(__name__)
 
 @app.route("/health")
@@ -19,26 +18,21 @@ def health():
 def run_flask():
     app.run(host="0.0.0.0", port=5000)
 
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.start()
-
-# ---------------- Bot sozlamalari ----------------
-MONITOR_BOT_TOKEN = "8144186293:AAGLBCcnmgmfSg9YAzGVe3vcafYy6CXZNTg"
-ADMIN_ID = 7483732504
-CHECK_INTERVAL = 300
+# ---------------- Config ----------------
+MONITOR_BOT_TOKEN = "8144186293:AAGLBCcnmgmfSg9YAzGVe3vcafYy6CXZNTg"   # Monitoring bot token
+ADMIN_ID = 7483732504                 # Admin ID
+CHECK_INTERVAL = 300                  # 5 minut
 JSON_FILE = "bots.json"
 
 bot = Bot(token=MONITOR_BOT_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(bot, storage=storage)
+dp = Dispatcher(bot)
 
 # ---------------- FSM ----------------
 class AddBotState(StatesGroup):
     token = State()
-    chat_id = State()
+    username = State()
 
-# ---------------- JSON bilan ishlash ----------------
+# ---------------- JSON ishlash ----------------
 def load_bots():
     try:
         with open(JSON_FILE, "r") as f:
@@ -50,37 +44,36 @@ def save_bots(bots):
     with open(JSON_FILE, "w") as f:
         json.dump(bots, f, indent=4, ensure_ascii=False)
 
-# ---------------- Monitoring ----------------
+def update_bot_status(token, status, when):
+    bots = load_bots()
+    for b in bots:
+        if b["token"] == token:
+            b["status"] = status
+            if status == "online":
+                b["last_online"] = when
+            else:
+                b["last_offline"] = when
+    save_bots(bots)
+
+# ---------------- Bot tekshirish ----------------
 async def check_bots():
-    await bot.send_message(ADMIN_ID, "✅ Monitoring bot ishga tushdi.")
+    await bot.send_message(ADMIN_ID, "✅ Monitoring ishga tushdi.")
     while True:
         bots = load_bots()
         for b in bots:
             token = b["token"]
-            chat_id = b["chat_id"]
             try:
+                test_bot = Bot(token=token)
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&text=/start", timeout=10) as response:
-                        data = await response.json()
-                        if not data.get("ok"):
-                            b["status"] = "offline"
-                            b["last_down"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            save_bots(bots)
-                            await bot.send_message(
-                                ADMIN_ID,
-                                f"⚠️ Bot ishlamayapti!\nToken: {token}\nXato: {data}"
-                            )
+                    async with session.get(f"https://api.telegram.org/bot{token}/getMe") as resp:
+                        if resp.status == 200:
+                            update_bot_status(token, "online", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
                         else:
-                            b["status"] = "online"
-                            save_bots(bots)
-            except Exception as e:
-                b["status"] = "offline"
-                b["last_down"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                save_bots(bots)
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"❌ Bot o‘chib qoldi!\nToken: {token}\nXato: {e}"
-                )
+                            update_bot_status(token, "offline", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                            await bot.send_message(ADMIN_ID, f"⚠️ Bot ishlamayapti: @{b['username']}")
+            except:
+                update_bot_status(token, "offline", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                await bot.send_message(ADMIN_ID, f"❌ Bot o‘chdi: @{b['username']}")
         await asyncio.sleep(CHECK_INTERVAL)
 
 # ---------------- Telegram komandalar ----------------
@@ -91,108 +84,99 @@ async def start_handler(message: types.Message):
 
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.add("➕ Bot qo‘shish", "📋 Botlar ro‘yxati")
-    keyboard.add("❌ Botni o‘chirish", "📊 Bot statistikasi")
-    await message.answer("👋 Salom Admin!\nQuyidagi menyudan tanlang:", reply_markup=keyboard)
+    keyboard.add("❌ Botni o‘chirish", "📊 Bot statistika")
+    await message.answer("👋 Salom Admin!\nQuyidagilardan tanlang:", reply_markup=keyboard)
 
-# ➕ Qo‘shish
-@dp.message_handler(lambda message: message.text == "➕ Bot qo‘shish")
-async def add_bot(message: types.Message, state: FSMContext):
-    await message.answer("🔑 Menga yangi bot token yuboring:")
+@dp.message_handler(lambda m: m.text == "➕ Bot qo‘shish")
+async def add_bot(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await message.answer("🔑 Menga bot token yuboring:")
     await AddBotState.token.set()
 
 @dp.message_handler(state=AddBotState.token)
-async def save_token(message: types.Message, state: FSMContext):
+async def add_bot_token(message: types.Message, state: FSMContext):
     await state.update_data(token=message.text.strip())
-    await message.answer("📩 Endi shu botga xabar yuboradigan chat_id ni yuboring:")
-    await AddBotState.chat_id.set()
+    await message.answer("👤 Endi bot username yuboring (@ bilan):")
+    await AddBotState.username.set()
 
-@dp.message_handler(state=AddBotState.chat_id)
-async def save_chat_id(message: types.Message, state: FSMContext):
+@dp.message_handler(state=AddBotState.username)
+async def add_bot_username(message: types.Message, state: FSMContext):
     data = await state.get_data()
     token = data["token"]
-    chat_id = message.text.strip()
+    username = message.text.strip().lstrip("@")
+
     bots = load_bots()
-
-    for b in bots:
-        if b["token"] == token:
-            await message.answer("⚠️ Bu bot allaqachon ro‘yxatda mavjud.")
-            await state.finish()
-            return
-
-    new_bot = {"token": token, "chat_id": chat_id, "status": "unknown", "last_down": "Hech qachon"}
-    bots.append(new_bot)
+    bots.append({
+        "token": token,
+        "username": username,
+        "status": "unknown",
+        "last_online": None,
+        "last_offline": None
+    })
     save_bots(bots)
-    await message.answer(f"✅ Bot qo‘shildi:\n{token}")
+
+    await message.answer(f"✅ Bot qo‘shildi: @{username}")
     await state.finish()
 
-# 📋 Ro‘yxat
-@dp.message_handler(lambda message: message.text == "📋 Botlar ro‘yxati")
+@dp.message_handler(lambda m: m.text == "📋 Botlar ro‘yxati")
 async def list_bots(message: types.Message):
     bots = load_bots()
     if not bots:
-        await message.answer("📭 Hozircha hech qanday bot qo‘shilmagan.")
-    else:
-        text = "📋 Botlar ro‘yxati:\n\n"
-        for i, b in enumerate(bots, start=1):
-            text += f"{i}. {b['token']} (status: {b['status']})\n"
-        await message.answer(text)
+        return await message.answer("📭 Hech qanday bot yo‘q.")
+    text = "📋 Botlar:\n\n"
+    for i, b in enumerate(bots, 1):
+        text += f"{i}. @{b['username']} (status: {b['status']})\n"
+    await message.answer(text)
 
-# ❌ O‘chirish
-@dp.message_handler(lambda message: message.text == "❌ Botni o‘chirish")
+@dp.message_handler(lambda m: m.text == "❌ Botni o‘chirish")
 async def delete_bot(message: types.Message):
     bots = load_bots()
     if not bots:
-        return await message.answer("📭 Hozircha hech qanday bot yo‘q.")
-
-    keyboard = types.InlineKeyboardMarkup()
+        return await message.answer("📭 Hech qanday bot yo‘q.")
+    kb = types.InlineKeyboardMarkup()
     for b in bots:
-        keyboard.add(types.InlineKeyboardButton(text=b["token"], callback_data=f"delete:{b['token']}"))
-    await message.answer("❌ O‘chirish uchun botni tanlang:", reply_markup=keyboard)
+        kb.add(types.InlineKeyboardButton(f"@{b['username']}", callback_data=f"del:{b['token']}"))
+    await message.answer("❌ O‘chirish uchun tanlang:", reply_markup=kb)
 
-@dp.callback_query_handler(lambda c: c.data.startswith("delete:"))
-async def confirm_delete(callback_query: types.CallbackQuery):
-    token = callback_query.data.split("delete:")[1]
+@dp.callback_query_handler(lambda c: c.data.startswith("del:"))
+async def delete_bot_confirm(call: types.CallbackQuery):
+    token = call.data.split(":")[1]
     bots = load_bots()
-    for b in bots:
-        if b["token"] == token:
-            bots.remove(b)
-            save_bots(bots)
-            await bot.send_message(ADMIN_ID, f"🗑 Bot o‘chirildi:\n{token}")
-            break
-    await callback_query.answer()
+    bots = [b for b in bots if b["token"] != token]
+    save_bots(bots)
+    await call.message.answer("🗑 Bot o‘chirildi.")
+    await call.answer()
 
-# 📊 Statistikasi
-@dp.message_handler(lambda message: message.text == "📊 Bot statistikasi")
-async def stats_menu(message: types.Message):
+@dp.message_handler(lambda m: m.text == "📊 Bot statistika")
+async def bot_statistics(message: types.Message):
     bots = load_bots()
     if not bots:
         return await message.answer("📭 Hozircha hech qanday bot yo‘q.")
-
-    keyboard = types.InlineKeyboardMarkup()
+    kb = types.InlineKeyboardMarkup()
     for b in bots:
-        keyboard.add(types.InlineKeyboardButton(text=b["token"], callback_data=f"stats:{b['token']}"))
-    await message.answer("📊 Statistika uchun botni tanlang:", reply_markup=keyboard)
+        kb.add(types.InlineKeyboardButton(f"@{b['username']}", callback_data=f"stat:{b['token']}"))
+    await message.answer("📊 Qaysi botni tekshirasiz?", reply_markup=kb)
 
-@dp.callback_query_handler(lambda c: c.data.startswith("stats:"))
-async def show_stats(callback_query: types.CallbackQuery):
-    token = callback_query.data.split("stats:")[1]
+@dp.callback_query_handler(lambda c: c.data.startswith("stat:"))
+async def show_stats(call: types.CallbackQuery):
+    token = call.data.split(":")[1]
     bots = load_bots()
     for b in bots:
         if b["token"] == token:
-            status = b.get("status", "unknown")
-            last_down = b.get("last_down", "Hech qachon")
-            await bot.send_message(
-                ADMIN_ID,
-                f"📊 Bot statistikasi:\n\n"
-                f"🆔 Token: {token}\n"
-                f"📡 Status: {status}\n"
-                f"⏱ Oxirgi o‘chgan vaqt: {last_down}"
-            )
-    await callback_query.answer()
+            text = f"📊 Statistika @{b['username']}:\n\n"
+            text += f"🟢 Status: {b['status']}\n"
+            text += f"⏰ Oxirgi online: {b['last_online']}\n"
+            text += f"❌ Oxirgi offline: {b['last_offline']}\n"
+            await call.message.answer(text)
+            break
+    await call.answer()
 
 # ---------------- Run ----------------
 if __name__ == "__main__":
-    keep_alive()
+    flask_thread = Thread(target=run_flask)
+    flask_thread.start()
+
     loop = asyncio.get_event_loop()
     loop.create_task(check_bots())
     executor.start_polling(dp, skip_updates=True)
